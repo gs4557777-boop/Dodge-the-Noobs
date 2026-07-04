@@ -458,7 +458,19 @@
     let lastFrameTime = 0;
 
     function isMobileMode() {
-      return window.matchMedia(MOBILE_MODE_QUERY).matches;
+      // 일부 모바일/인앱 브라우저에서 matchMedia가 폭탄 닿는 순간 에러를 내면 게임 루프가 멈출 수 있음
+      try {
+        if (window.matchMedia && window.matchMedia(MOBILE_MODE_QUERY).matches) {
+          return true;
+        }
+      } catch (err) {
+        // 아래 fallback으로 계속 진행
+      }
+
+      const width = window.innerWidth || document.documentElement.clientWidth || canvas.clientWidth || canvas.width;
+      const touchPoints = (navigator.maxTouchPoints || navigator.msMaxTouchPoints || 0);
+
+      return width <= 768 || touchPoints > 0 || "ontouchstart" in window;
     }
 
     function getBombExplosionRadius() {
@@ -549,29 +561,53 @@
     document.addEventListener("touchstart", handleFirstAudioGesture, { passive: true });
 
     function gameLoop(timestamp) {
-      if (!lastFrameTime) {
+      try {
+        if (!lastFrameTime) {
+          lastFrameTime = timestamp;
+        }
+
+        const delta = timestamp - lastFrameTime;
         lastFrameTime = timestamp;
-      }
 
-      const delta = timestamp - lastFrameTime;
-      lastFrameTime = timestamp;
+        // 모바일에서 순간 렉이 와도 다음 프레임에 계산이 폭주하지 않게 제한
+        frameScale = Math.min(Math.max(delta / 16.6667, 0.5), 2.5);
 
-      // 모바일에서 순간 렉이 와도 다음 프레임에 계산이 폭주하지 않게 제한
-      frameScale = Math.min(Math.max(delta / 16.6667, 0.5), 2.5);
+        update();
 
-      update();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (gameState === "start") {
+          drawStartScreen();
+        }
 
-      if (gameState === "start") {
-        drawStartScreen();
-      }
-
-      if (gameState === "play") {
-        drawGameScreen();
+        if (gameState === "play") {
+          drawGameScreen();
+        }
+      } catch (err) {
+        recoverFromGameError(err);
       }
 
       requestAnimationFrame(gameLoop);
+    }
+
+    function recoverFromGameError(err) {
+      console.error("게임 오류 복구:", err);
+
+      releaseMobileControls();
+      frameScale = 1;
+      lastFrameTime = 0;
+
+      // 오류가 나도 게임이 완전히 멈추지 않게 위험한 오브젝트만 정리
+      obstacles = obstacles.filter(function(ob) {
+        return ob && typeof ob.x === "number" && typeof ob.y === "number" && typeof ob.width === "number" && typeof ob.height === "number";
+      });
+
+      trimObstacles();
+      explosionEffects = [];
+
+      if (!gameOver && gameState === "play") {
+        addBonusText("오류 복구됨");
+      }
     }
 
     function update() {
@@ -636,6 +672,12 @@
 
       for (let i = obstacles.length - 1; i >= 0; i--) {
         const ob = obstacles[i];
+
+        if (!ob) {
+          obstacles.splice(i, 1);
+          continue;
+        }
+
         ob.y += ob.speed * frameScale;
 
         if (isCollidingWithObstacle(player, ob)) {
@@ -643,6 +685,10 @@
 
           if (ob.type === "bomb") {
             triggerBomb();
+            updateExplosionEffects();
+            updateBonusTexts();
+            updateDamageFreeReward();
+            return;
           } else if (ob.type === "fire") {
             hitByFireEnemy();
           } else {
@@ -772,6 +818,8 @@
     }
 
     function isCollidingWithObstacle(target, ob) {
+      if (!ob) return false;
+
       if (ob.type === "bomb") {
         return isColliding(target, getExpandedRect(ob, BOMB_PICKUP_PADDING));
       }
@@ -787,6 +835,10 @@
     }
 
     function isRectInCircle(rect, circleX, circleY, radius) {
+      if (!rect || !Number.isFinite(circleX) || !Number.isFinite(circleY) || !Number.isFinite(radius)) {
+        return false;
+      }
+
       const closestX = Math.max(rect.x, Math.min(circleX, rect.x + rect.width));
       const closestY = Math.max(rect.y, Math.min(circleY, rect.y + rect.height));
       const dx = circleX - closestX;
@@ -838,31 +890,52 @@
     }
 
     function triggerBomb() {
-      const center = getRectCenter(player);
-      const radius = getBombExplosionRadius();
-      let removedCount = 0;
+      try {
+        const center = getRectCenter(player);
+        const radius = getBombExplosionRadius();
+        let removedCount = 0;
+        const keptObstacles = [];
 
-      for (let i = obstacles.length - 1; i >= 0; i--) {
-        const ob = obstacles[i];
+        // splice를 반복하면 모바일에서 순간 멈칫할 수 있어서 새 배열로 안전하게 재구성
+        for (const ob of obstacles) {
+          if (!ob) continue;
 
-        if ((ob.type === "normal" || ob.type === "fire") && isRectInCircle(ob, center.x, center.y, radius)) {
-          obstacles.splice(i, 1);
-          removedCount++;
+          const canRemove = (ob.type === "normal" || ob.type === "fire") && isRectInCircle(ob, center.x, center.y, radius);
+
+          if (canRemove) {
+            removedCount++;
+          } else {
+            keptObstacles.push(ob);
+          }
         }
-      }
 
-      explosionEffects.push({
-        x: center.x,
-        y: center.y,
-        radius: radius,
-        timer: 18,
-        maxTimer: 18
-      });
+        obstacles = keptObstacles;
+        trimObstacles();
 
-      if (removedCount > 0) {
-        addBonusText("폭탄 범위 확장! 적 " + removedCount + "마리 제거");
-      } else {
-        addBonusText("폭탄 발동!");
+        explosionEffects.push({
+          x: center.x,
+          y: center.y,
+          radius: radius,
+          timer: 18,
+          maxTimer: 18
+        });
+
+        if (explosionEffects.length > 2) {
+          explosionEffects.shift();
+        }
+
+        if (removedCount > 0) {
+          addBonusText("폭탄 발동! 적 " + removedCount + "마리 제거");
+        } else {
+          addBonusText("폭탄 발동!");
+        }
+      } catch (err) {
+        console.error("폭탄 처리 오류:", err);
+        obstacles = obstacles.filter(function(ob) {
+          return ob && ob.type !== "bomb";
+        });
+        explosionEffects = [];
+        addBonusText("폭탄 오류 복구됨");
       }
     }
 
@@ -1158,8 +1231,12 @@
 
     function drawExplosionEffects() {
       for (const effect of explosionEffects) {
-        const progress = effect.timer / effect.maxTimer;
-        const radius = effect.radius * (1 - progress * 0.25);
+        if (!effect || !Number.isFinite(effect.x) || !Number.isFinite(effect.y) || !Number.isFinite(effect.radius)) {
+          continue;
+        }
+
+        const progress = Math.max(0, Math.min(1, effect.timer / effect.maxTimer));
+        const radius = Math.min(effect.radius * (1 - progress * 0.25), 900);
         const alpha = 0.25 * progress;
 
         ctx.beginPath();
