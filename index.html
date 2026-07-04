@@ -224,17 +224,19 @@
       }
     });
 
-    let wantedAudio = null;
     let audioPrepared = false;
+    let audioUnlocked = false;
+    let currentMusic = null;
 
     function prepareAudioOnce() {
       if (audioPrepared) return;
       audioPrepared = true;
 
-      // preload="auto"만 믿고 감. 클릭할 때 load()를 다시 부르면 음악이 처음부터 다시 시작됨.
       try {
         mainBgm.preload = "auto";
         playBgm.preload = "auto";
+        mainBgm.load();
+        playBgm.load();
       } catch (err) {
         // 오디오 준비 실패해도 게임은 계속 진행
       }
@@ -244,7 +246,11 @@
 
     function safeResetAudio(audio) {
       try {
-        audio.currentTime = 0;
+        if (audio && Number.isFinite(audio.duration)) {
+          audio.currentTime = 0;
+        } else if (audio) {
+          audio.currentTime = 0;
+        }
       } catch (err) {
         // 아직 로딩 전이면 currentTime 변경이 막힐 수 있음
       }
@@ -252,9 +258,12 @@
 
     function safePlay(audio) {
       if (!audio) return;
-      wantedAudio = audio;
 
       try {
+        if (!audio.paused && !audio.ended) {
+          return;
+        }
+
         const playPromise = audio.play();
 
         if (playPromise && typeof playPromise.catch === "function") {
@@ -267,21 +276,33 @@
       }
     }
 
+    function pauseAudio(audio) {
+      try {
+        if (audio) audio.pause();
+      } catch (err) {
+        // 무시
+      }
+    }
+
     function switchMusic(targetAudio, restart) {
       if (!targetAudio) return;
       prepareAudioOnce();
 
       const otherAudio = targetAudio === mainBgm ? playBgm : mainBgm;
-      wantedAudio = targetAudio;
 
-      try {
-        otherAudio.pause();
-      } catch (err) {
-        // 무시
+      // 핵심: 같은 노래를 다시 요청하면 절대 currentTime을 0으로 돌리지 않음.
+      // 그래서 화면 클릭/터치로 음악이 처음부터 다시 시작하지 않음.
+      if (currentMusic === targetAudio) {
+        safePlay(targetAudio);
+        return;
       }
 
-      if (restart) {
-        safeResetAudio(otherAudio);
+      pauseAudio(otherAudio);
+      safeResetAudio(otherAudio);
+
+      currentMusic = targetAudio;
+
+      if (restart !== false) {
         safeResetAudio(targetAudio);
       }
 
@@ -298,28 +319,16 @@
 
     function unlockAudioByGesture() {
       prepareAudioOnce();
+      audioUnlocked = true;
 
-      if (gameState === "start") {
-        if (!wantedAudio) {
-          wantedAudio = mainBgm;
-        }
-        mainBgmStarted = true;
-        safePlay(wantedAudio);
-        return;
+      if (!currentMusic) {
+        currentMusic = gameState === "play" && !gameOver ? playBgm : mainBgm;
       }
 
-      if (gameState === "play") {
-        if (!gameOver) {
-          wantedAudio = playBgm;
-        } else if (!wantedAudio) {
-          wantedAudio = mainBgm;
-        }
-
-        safePlay(wantedAudio);
-      }
+      safePlay(currentMusic);
     }
 
-    // 첫 터치/클릭에서 오디오 잠금 해제만 함. currentTime은 건드리지 않아서 음악이 다시 시작하지 않음.
+    // 모바일 첫 터치에서 오디오 잠금 해제만 함. 같은 노래면 다시 시작하지 않음.
     document.addEventListener("pointerdown", unlockAudioByGesture, { passive: true });
     document.addEventListener("touchstart", unlockAudioByGesture, { passive: true });
 
@@ -516,8 +525,8 @@
     }
 
     function getBombVisualRadius(radius) {
-      // 실제 판정은 위 radius 그대로, 화면 이펙트만 너무 커서 렉 나는 걸 막음
-      return Math.min(radius, cachedMobileMode ? 420 : 680);
+      // 실제 판정은 위 radius 그대로, 화면 이펙트만 작게 그려서 모바일 렉/멈춤 방지
+      return Math.min(radius, cachedMobileMode ? 260 : 360);
     }
 
     function getMaxObstacleLimit() {
@@ -714,10 +723,9 @@
 
           if (ob.type === "bomb") {
             triggerBomb();
-            updateExplosionEffects();
-            updateBonusTexts();
-            updateDamageFreeReward();
-            return;
+            // 폭탄 처리 후 obstacles 배열이 다시 만들어지니까 이 프레임의 충돌 루프는 여기서 끊음.
+            // return으로 update 전체를 끊지 않아서 화면/음악/타이머가 멈춘 것처럼 보이지 않음.
+            break;
           } else if (ob.type === "fire") {
             hitByFireEnemy();
           } else {
@@ -918,17 +926,27 @@
       }
     }
 
+    function isValidObstacle(ob) {
+      return (
+        ob &&
+        Number.isFinite(ob.x) &&
+        Number.isFinite(ob.y) &&
+        Number.isFinite(ob.width) &&
+        Number.isFinite(ob.height) &&
+        Number.isFinite(ob.speed)
+      );
+    }
+
     function triggerBomb() {
       const center = getRectCenter(player);
       const radius = getBombExplosionRadius();
       let removedCount = 0;
-      const keptObstacles = [];
+      const nextObstacles = [];
 
-      // 폭탄 처리 중 JS 오류가 나면 게임이 멈추니까, 숫자 이상한 오브젝트는 그냥 버림.
-      for (let i = 0; i < obstacles.length; i++) {
-        const ob = obstacles[i];
-
-        if (!ob || !Number.isFinite(ob.x) || !Number.isFinite(ob.y) || !Number.isFinite(ob.width) || !Number.isFinite(ob.height)) {
+      // 폭탄 터질 때 splice 반복/배열 중간 변경을 피함.
+      // 새 배열로 갈아끼우는 방식이라 모바일에서 멈춤 확률을 확 줄임.
+      for (const ob of obstacles) {
+        if (!isValidObstacle(ob)) {
           continue;
         }
 
@@ -937,20 +955,19 @@
           continue;
         }
 
-        keptObstacles.push(ob);
+        nextObstacles.push(ob);
       }
 
-      obstacles = keptObstacles;
+      obstacles = nextObstacles;
       trimObstacles();
 
-      explosionEffects.length = 0;
-      explosionEffects.push({
+      explosionEffects = [{
         x: center.x,
         y: center.y,
         radius: getBombVisualRadius(radius),
-        timer: 14,
-        maxTimer: 14
-      });
+        timer: 12,
+        maxTimer: 12
+      }];
 
       if (removedCount > 0) {
         addBonusText("폭탄 발동! 적 " + removedCount + "마리 제거");
@@ -1256,17 +1273,20 @@
         }
 
         const progress = Math.max(0, Math.min(1, effect.timer / effect.maxTimer));
-        const radius = Math.max(1, Math.min(effect.radius * (1 - progress * 0.25), 700));
-        const alpha = Math.max(0, Math.min(0.22, 0.22 * progress));
+        const radius = Math.max(1, Math.min(effect.radius * (1 - progress * 0.18), 380));
+        const alpha = Math.max(0, Math.min(0.35, 0.35 * progress));
 
+        // 큰 원 fill은 모바일에서 순간 렉 만들 수 있어서 테두리 + 중앙 플래시만 그림
         ctx.beginPath();
         ctx.arc(effect.x, effect.y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255, 230, 80, " + alpha + ")";
-        ctx.fill();
-
-        ctx.lineWidth = 5;
-        ctx.strokeStyle = "rgba(255, 255, 255, " + alpha + ")";
+        ctx.lineWidth = 8;
+        ctx.strokeStyle = "rgba(255, 240, 120, " + alpha + ")";
         ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(effect.x, effect.y, 70 * progress, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255, 230, 80, " + (alpha * 0.45) + ")";
+        ctx.fill();
       }
     }
 
