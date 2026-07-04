@@ -55,7 +55,7 @@
     }
 
     #mobileControls.show {
-      display: flex;
+      display: none;
     }
 
     #mobileControls button {
@@ -80,6 +80,13 @@
     #mobileControls button.pressed img {
       filter: brightness(55%);
       transform: scale(0.95);
+    }
+
+    /* 모바일에서만 이동 버튼 보이기 */
+    @media (max-width: 768px), (pointer: coarse) {
+      #mobileControls.show {
+        display: flex;
+      }
     }
   </style>
 </head>
@@ -133,7 +140,7 @@
     }
 
     function pressLeft(e) {
-      e.preventDefault();
+      if (e) e.preventDefault();
       mobileLeft = true;
       leftBtn.classList.add("pressed");
     }
@@ -145,7 +152,7 @@
     }
 
     function pressRight(e) {
-      e.preventDefault();
+      if (e) e.preventDefault();
       mobileRight = true;
       rightBtn.classList.add("pressed");
     }
@@ -589,6 +596,7 @@
       }
 
       drawMainCredits();
+      drawControlGuide();
     }
 
     function drawMainCredits() {
@@ -599,6 +607,27 @@
       const line2 = "If I Had a Chicken - Kevin MacLeod";
 
       const x = 10;
+      const y1 = canvas.height - 32;
+      const y2 = canvas.height - 12;
+
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "black";
+      ctx.strokeText(line1, x, y1);
+      ctx.strokeText(line2, x, y2);
+
+      ctx.fillStyle = "rgba(190, 190, 190, 0.95)";
+      ctx.fillText(line1, x, y1);
+      ctx.fillText(line2, x, y2);
+    }
+
+    function drawControlGuide() {
+      ctx.font = "15px Arial";
+      ctx.textAlign = "right";
+
+      const line1 = "PC용 조작키: A / D";
+      const line2 = "모바일용도 있습니다";
+
+      const x = canvas.width - 10;
       const y1 = canvas.height - 32;
       const y2 = canvas.height - 12;
 
