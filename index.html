@@ -296,9 +296,19 @@
         scoreTimer = 0;
       }
 
+      // 점수에 따라 난이도 증가
+      const level = Math.floor(score / 500);
+      const spawnDelay = Math.max(45 - level * 3, 20);
+
       spawnTimer++;
-      if (spawnTimer > 45) {
-        spawnObstacle();
+
+      if (spawnTimer > spawnDelay) {
+        const enemyCount = Math.min(1 + Math.floor(level / 2), 4);
+
+        for (let i = 0; i < enemyCount; i++) {
+          spawnObstacle();
+        }
+
         spawnTimer = 0;
       }
 
@@ -363,14 +373,17 @@
     }
 
     function spawnObstacle() {
-      const size = 60;
+      const level = Math.floor(score / 500);
+
+      const size = Math.min(60 + level * 3, 85);
+      const speed = Math.min(Math.random() * 3 + 3 + level * 0.35, 9);
 
       obstacles.push({
         x: Math.random() * (canvas.width - size),
         y: -size,
         width: size,
         height: size,
-        speed: Math.random() * 3 + 3
+        speed: speed
       });
     }
 
