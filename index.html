@@ -50,6 +50,8 @@
       background: black;
       cursor: pointer;
       z-index: 1;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
     }
 
     #mobileControls {
@@ -59,6 +61,8 @@
       gap: 55px;
       margin-top: -5px;
       z-index: 5;
+      touch-action: none;
+      user-select: none;
     }
 
     #mobileControls.show {
@@ -203,12 +207,22 @@
       releaseRight();
     });
 
+    function safePlay(audio) {
+      const playPromise = audio.play();
+
+      if (playPromise && typeof playPromise.catch === "function") {
+        playPromise.catch(function() {
+          // 모바일 브라우저가 자동재생을 막는 경우 콘솔 에러로 게임이 멈추지 않게 처리
+        });
+      }
+    }
+
     function playMainBgm() {
       playBgm.pause();
       playBgm.currentTime = 0;
 
       mainBgm.currentTime = 0;
-      mainBgm.play();
+      safePlay(mainBgm);
     }
 
     function playPlayBgm() {
@@ -216,7 +230,7 @@
       mainBgm.currentTime = 0;
 
       playBgm.currentTime = 0;
-      playBgm.play();
+      safePlay(playBgm);
     }
 
     const startImg = new Image();
@@ -265,31 +279,59 @@
 
     let loadedCount = 0;
     const totalImages = 15;
+    let loopStarted = false;
 
     function imageLoaded() {
       loadedCount++;
 
-      if (loadedCount === totalImages) {
+      if (loadedCount >= totalImages && !loopStarted) {
+        loopStarted = true;
         requestAnimationFrame(gameLoop);
       }
     }
 
-    startImg.onload = imageLoaded;
-    bgImg.onload = imageLoaded;
-    startButtonImg.onload = imageLoaded;
-    startButtonHoverImg.onload = imageLoaded;
-    enemyImg.onload = imageLoaded;
-    gameOverImg.onload = imageLoaded;
-    retryButtonImg.onload = imageLoaded;
-    retryButtonHoverImg.onload = imageLoaded;
+    function watchImage(img, name) {
+      let done = false;
 
-    playerImages.front.onload = imageLoaded;
-    playerImages.right1.onload = imageLoaded;
-    playerImages.rightIdle.onload = imageLoaded;
-    playerImages.right2.onload = imageLoaded;
-    playerImages.left1.onload = imageLoaded;
-    playerImages.leftIdle.onload = imageLoaded;
-    playerImages.left2.onload = imageLoaded;
+      function finish() {
+        if (done) return;
+        done = true;
+        imageLoaded();
+      }
+
+      img.onload = finish;
+      img.onerror = function() {
+        console.warn("이미지 로딩 실패:", name, img.src);
+        finish();
+      };
+
+      // 캐시 때문에 onload가 이미 지나간 이미지도 게임이 멈추지 않게 처리
+      if (img.complete) {
+        finish();
+      }
+    }
+
+    const imageList = [
+      [startImg, "시작화면"],
+      [bgImg, "전투배경"],
+      [startButtonImg, "시작 버튼"],
+      [startButtonHoverImg, "시작 버튼 선택됨"],
+      [enemyImg, "뉴비"],
+      [gameOverImg, "게임 오버"],
+      [retryButtonImg, "다시 버튼"],
+      [retryButtonHoverImg, "다시 버튼 선택됨"],
+      [playerImages.front, "주인공 앞"],
+      [playerImages.right1, "주인공 오른쪽 이동 1"],
+      [playerImages.rightIdle, "주인공 오른쪽 이동 대기"],
+      [playerImages.right2, "주인공 오른쪽 이동 2"],
+      [playerImages.left1, "주인공 왼쪽 이동 1"],
+      [playerImages.leftIdle, "주인공 왼쪽 이동 대기"],
+      [playerImages.left2, "주인공 왼쪽 이동 2"]
+    ];
+
+    for (const item of imageList) {
+      watchImage(item[0], item[1]);
+    }
 
     let startAlpha = 0;
     let showButton = false;
@@ -364,7 +406,15 @@
 
       if (!mainBgmStarted && gameState === "start") {
         mainBgmStarted = true;
-        mainBgm.play();
+        safePlay(mainBgm);
+      }
+
+      if (gameState === "start" && showButton && (e.key === "Enter" || e.key === " ")) {
+        startGame();
+      }
+
+      if (gameState === "play" && gameOverPhase === "result" && showRetryButton && (e.key === "Enter" || e.key === " ")) {
+        restartGame();
       }
     });
 
@@ -372,10 +422,10 @@
       keys[e.key] = false;
     });
 
-    document.addEventListener("click", function() {
+    document.addEventListener("pointerdown", function() {
       if (!mainBgmStarted && gameState === "start") {
         mainBgmStarted = true;
-        mainBgm.play();
+        safePlay(mainBgm);
       }
     });
 
@@ -773,6 +823,16 @@
       }
     }
 
+    function startGame() {
+      gameState = "play";
+      canvas.style.cursor = "default";
+      lastMoveTime = Date.now();
+
+      showMobileControls();
+
+      playPlayBgm();
+    }
+
     function restartGame() {
       hp = maxHp;
       score = 0;
@@ -814,47 +874,74 @@
       );
     }
 
-    canvas.addEventListener("mousemove", function(e) {
+    function getCanvasPoint(e) {
       const rect = canvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
+
+      let clientX = e.clientX;
+      let clientY = e.clientY;
+
+      if (e.touches && e.touches.length > 0) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else if (e.changedTouches && e.changedTouches.length > 0) {
+        clientX = e.changedTouches[0].clientX;
+        clientY = e.changedTouches[0].clientY;
+      }
+
+      return {
+        x: (clientX - rect.left) * (canvas.width / rect.width),
+        y: (clientY - rect.top) * (canvas.height / rect.height)
+      };
+    }
+
+    function updateButtonHover(e) {
+      const point = getCanvasPoint(e);
 
       if (gameState === "start" && showButton) {
-        isHoverStartButton = isMouseOnButton(mouseX, mouseY, startButton);
+        isHoverStartButton = isMouseOnButton(point.x, point.y, startButton);
+      } else {
+        isHoverStartButton = false;
       }
 
       if (gameState === "play" && gameOverPhase === "result" && showRetryButton) {
-        isHoverRetryButton = isMouseOnButton(mouseX, mouseY, retryButton);
+        isHoverRetryButton = isMouseOnButton(point.x, point.y, retryButton);
+      } else {
+        isHoverRetryButton = false;
       }
+    }
+
+    function handleCanvasPress(e) {
+      if (e) {
+        e.preventDefault();
+      }
+
+      const point = getCanvasPoint(e);
+
+      if (gameState === "start" && showButton) {
+        if (isMouseOnButton(point.x, point.y, startButton)) {
+          startGame();
+          return;
+        }
+      }
+
+      if (gameState === "play" && gameOverPhase === "result" && showRetryButton) {
+        if (isMouseOnButton(point.x, point.y, retryButton)) {
+          restartGame();
+        }
+      }
+    }
+
+    canvas.addEventListener("pointermove", updateButtonHover);
+
+    canvas.addEventListener("pointerdown", handleCanvasPress, {
+      passive: false
     });
+
+    canvas.addEventListener("click", handleCanvasPress);
 
     canvas.addEventListener("mouseleave", function() {
       isHoverStartButton = false;
       isHoverRetryButton = false;
-    });
-
-    canvas.addEventListener("click", function(e) {
-      const rect = canvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-
-      if (gameState === "start" && showButton) {
-        if (isMouseOnButton(mouseX, mouseY, startButton)) {
-          gameState = "play";
-          canvas.style.cursor = "default";
-          lastMoveTime = Date.now();
-
-          showMobileControls();
-
-          playPlayBgm();
-        }
-      }
-
-      if (gameState === "play" && gameOverPhase === "result" && showRetryButton) {
-        if (isMouseOnButton(mouseX, mouseY, retryButton)) {
-          restartGame();
-        }
-      }
     });
   </script>
 </body>
