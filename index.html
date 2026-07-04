@@ -248,6 +248,12 @@
     const enemyImg = new Image();
     enemyImg.src = "png/적/뉴비.png";
 
+    const fireEnemyImg = new Image();
+    fireEnemyImg.src = "png/적/불뉴비.png";
+
+    const bombImg = new Image();
+    bombImg.src = "png/아이템/폭탄.png";
+
     const gameOverImg = new Image();
     gameOverImg.src = "png/게임 오버.png";
 
@@ -278,7 +284,7 @@
     playerImages.left2.src = "png/주인공/주인공_왼쪽 이동 2.png";
 
     let loadedCount = 0;
-    const totalImages = 15;
+    const totalImages = 17;
     let loopStarted = false;
 
     function imageLoaded() {
@@ -317,6 +323,8 @@
       [startButtonImg, "시작 버튼"],
       [startButtonHoverImg, "시작 버튼 선택됨"],
       [enemyImg, "뉴비"],
+      [fireEnemyImg, "불뉴비"],
+      [bombImg, "폭탄"],
       [gameOverImg, "게임 오버"],
       [retryButtonImg, "다시 버튼"],
       [retryButtonHoverImg, "다시 버튼 선택됨"],
@@ -363,8 +371,9 @@
       speed: 6
     };
 
-    let hp = 70;
-    const maxHp = 70;
+    const baseMaxHp = 70;
+    let maxHp = baseMaxHp;
+    let hp = maxHp;
 
     let score = 0;
     let recentScore = 0;
@@ -372,6 +381,18 @@
 
     let scoreTimer = 0;
     let gameOver = false;
+
+    let damageFreeTimer = 0;
+    let damageFreeRequirement = 60 * 15;
+    const damageFreeRequirementIncrease = 60 * 5;
+
+    let bonusTexts = [];
+
+    let burnEffectTimer = 0;
+    const burnEffectDuration = 60 * 8;
+    let burnDamageTimer = 0;
+
+    let explosionEffects = [];
 
     let obstacles = [];
     let spawnTimer = 0;
@@ -450,8 +471,13 @@
 
       if (gameOver) {
         updateGameOverEffect();
+        updateBonusTexts();
+        updateExplosionEffects();
         return;
       }
+
+      updateBurnEffect();
+      if (gameOver) return;
 
       let moving = false;
 
@@ -506,18 +532,28 @@
 
         if (isColliding(player, ob)) {
           obstacles.splice(i, 1);
-          hp -= 10;
 
-          if (hp <= 0) {
-            hp = 0;
-            startGameOver();
+          if (ob.type === "bomb") {
+            triggerBomb();
+          } else if (ob.type === "fire") {
+            hitByFireEnemy();
+          } else {
+            takeDamage(10);
           }
+
+          if (gameOver) return;
+          continue;
         }
 
-        if (ob.y > canvas.height) {
+        // 캔버스 밖까지 내려간 뒤 삭제가 아니라, 바닥에 닿는 순간 삭제
+        if (ob.y + ob.height >= canvas.height) {
           obstacles.splice(i, 1);
         }
       }
+
+      updateExplosionEffects();
+      updateBonusTexts();
+      updateDamageFreeReward();
     }
 
     function updatePlayerAnimation(moving) {
@@ -566,7 +602,39 @@
       const size = Math.min(60 + level * 3, 85);
       const speed = Math.min(Math.random() * 3 + 3 + level * 0.35, 9);
 
+      let type = "normal";
+
+      // 난이도 올라가면 가끔 불뉴비 등장
+      if (level >= 2) {
+        const fireChance = Math.min(0.06 + (level - 2) * 0.015, 0.18);
+
+        if (Math.random() < fireChance) {
+          type = "fire";
+        }
+      }
+
       obstacles.push({
+        type: type,
+        x: Math.random() * (canvas.width - size),
+        y: -size,
+        width: size,
+        height: size,
+        speed: speed
+      });
+
+      // 적이 떨어질 때마다 아주 가끔 폭탄도 같이 떨어짐
+      if (Math.random() < 0.035) {
+        spawnBomb();
+      }
+    }
+
+    function spawnBomb() {
+      const level = Math.floor(score / 500);
+      const size = 65;
+      const speed = Math.min(Math.random() * 2 + 4 + level * 0.2, 8);
+
+      obstacles.push({
+        type: "bomb",
         x: Math.random() * (canvas.width - size),
         y: -size,
         width: size,
@@ -584,11 +652,189 @@
       );
     }
 
+    function getRectCenter(rect) {
+      return {
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2
+      };
+    }
+
+    function isRectInCircle(rect, circleX, circleY, radius) {
+      const closestX = Math.max(rect.x, Math.min(circleX, rect.x + rect.width));
+      const closestY = Math.max(rect.y, Math.min(circleY, rect.y + rect.height));
+      const dx = circleX - closestX;
+      const dy = circleY - closestY;
+
+      return dx * dx + dy * dy <= radius * radius;
+    }
+
+    function takeDamage(amount) {
+      if (gameOver) return;
+
+      hp -= amount;
+      damageFreeTimer = 0;
+
+      if (hp <= 0) {
+        hp = 0;
+        startGameOver();
+      }
+    }
+
+    function hitByFireEnemy() {
+      const wasBurning = burnEffectTimer > 0;
+
+      takeDamage(5);
+      if (gameOver) return;
+
+      if (!wasBurning) {
+        burnEffectTimer = burnEffectDuration;
+        burnDamageTimer = 0;
+        addBonusText("불뉴비 효과! 8초 지속 피해");
+      }
+    }
+
+    function updateBurnEffect() {
+      if (burnEffectTimer <= 0) return;
+
+      burnEffectTimer--;
+      burnDamageTimer++;
+
+      if (burnDamageTimer >= 60) {
+        burnDamageTimer = 0;
+        takeDamage(2);
+      }
+
+      if (burnEffectTimer <= 0) {
+        burnEffectTimer = 0;
+        burnDamageTimer = 0;
+      }
+    }
+
+    function triggerBomb() {
+      const center = getRectCenter(player);
+      const radius = 165;
+      let removedCount = 0;
+
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const ob = obstacles[i];
+
+        if ((ob.type === "normal" || ob.type === "fire") && isRectInCircle(ob, center.x, center.y, radius)) {
+          obstacles.splice(i, 1);
+          removedCount++;
+        }
+      }
+
+      explosionEffects.push({
+        x: center.x,
+        y: center.y,
+        radius: radius,
+        timer: 18,
+        maxTimer: 18
+      });
+
+      if (removedCount > 0) {
+        addBonusText("폭탄! 주변 적 " + removedCount + "마리 제거");
+      } else {
+        addBonusText("폭탄 발동!");
+      }
+    }
+
+    function updateDamageFreeReward() {
+      damageFreeTimer++;
+
+      if (damageFreeTimer < damageFreeRequirement) return;
+
+      damageFreeTimer = 0;
+
+      if (Math.random() < 0.5) {
+        maxHp += 5;
+        addBonusText("최대체력 +5");
+      } else {
+        hp = Math.min(hp + 10, maxHp);
+        addBonusText("체력 +10");
+      }
+
+      damageFreeRequirement += damageFreeRequirementIncrease;
+    }
+
+    function addBonusText(text) {
+      bonusTexts.push({
+        text: text,
+        timer: 120,
+        maxTimer: 120
+      });
+
+      if (bonusTexts.length > 3) {
+        bonusTexts.shift();
+      }
+    }
+
+    function updateBonusTexts() {
+      for (let i = bonusTexts.length - 1; i >= 0; i--) {
+        bonusTexts[i].timer--;
+
+        if (bonusTexts[i].timer <= 0) {
+          bonusTexts.splice(i, 1);
+        }
+      }
+    }
+
+    function updateExplosionEffects() {
+      for (let i = explosionEffects.length - 1; i >= 0; i--) {
+        explosionEffects[i].timer--;
+
+        if (explosionEffects[i].timer <= 0) {
+          explosionEffects.splice(i, 1);
+        }
+      }
+    }
+
+    function resetGameplayValues() {
+      maxHp = baseMaxHp;
+      hp = maxHp;
+      score = 0;
+      recentScore = 0;
+      scoreTimer = 0;
+
+      gameOver = false;
+      gameOverPhase = "none";
+      fadeAlpha = 0;
+      gameOverStartTime = 0;
+
+      damageFreeTimer = 0;
+      damageFreeRequirement = 60 * 15;
+      bonusTexts = [];
+
+      burnEffectTimer = 0;
+      burnDamageTimer = 0;
+      explosionEffects = [];
+
+      obstacles = [];
+      spawnTimer = 0;
+
+      retryButtonAlpha = 0;
+      showRetryButton = false;
+      isHoverRetryButton = false;
+
+      player.x = 355;
+      player.y = 570;
+
+      moveDirection = "front";
+      currentPlayerImg = playerImages.front;
+      lastMoveTime = Date.now();
+    }
+
     function startGameOver() {
       gameOver = true;
       recentScore = score;
 
       hideMobileControls();
+
+      burnEffectTimer = 0;
+      burnDamageTimer = 0;
+      damageFreeTimer = 0;
+      explosionEffects = [];
+      bonusTexts = [];
 
       playMainBgm();
 
@@ -731,7 +977,7 @@
       ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
 
       for (const ob of obstacles) {
-        ctx.drawImage(enemyImg, ob.x, ob.y, ob.width, ob.height);
+        drawObstacle(ob);
       }
 
       ctx.drawImage(
@@ -742,13 +988,99 @@
         player.height
       );
 
+      drawExplosionEffects();
+      drawBurnOverlay();
+
       drawHpBar();
       drawScoreText();
+      drawBonusTexts();
 
       if (gameOverPhase === "darken") {
         ctx.fillStyle = "rgba(0, 0, 0, " + fadeAlpha + ")";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
+    }
+
+    function drawObstacle(ob) {
+      let img = enemyImg;
+
+      if (ob.type === "fire") {
+        img = fireEnemyImg;
+      }
+
+      if (ob.type === "bomb") {
+        img = bombImg;
+      }
+
+      if (img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, ob.x, ob.y, ob.width, ob.height);
+        return;
+      }
+
+      // 이미지가 없을 때도 게임이 멈추지 않게 임시 표시
+      if (ob.type === "bomb") {
+        ctx.fillStyle = "yellow";
+      } else if (ob.type === "fire") {
+        ctx.fillStyle = "red";
+      } else {
+        ctx.fillStyle = "white";
+      }
+
+      ctx.fillRect(ob.x, ob.y, ob.width, ob.height);
+    }
+
+    function drawExplosionEffects() {
+      for (const effect of explosionEffects) {
+        const progress = effect.timer / effect.maxTimer;
+        const radius = effect.radius * (1 - progress * 0.25);
+        const alpha = 0.25 * progress;
+
+        ctx.beginPath();
+        ctx.arc(effect.x, effect.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255, 230, 80, " + alpha + ")";
+        ctx.fill();
+
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = "rgba(255, 255, 255, " + alpha + ")";
+        ctx.stroke();
+      }
+    }
+
+    function drawBonusTexts() {
+      ctx.textAlign = "center";
+      ctx.font = "28px Arial";
+      ctx.lineWidth = 6;
+
+      for (let i = 0; i < bonusTexts.length; i++) {
+        const item = bonusTexts[i];
+        const alpha = Math.min(1, item.timer / 25);
+        const y = 125 + i * 36 - (item.maxTimer - item.timer) * 0.08;
+
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = "black";
+        ctx.fillStyle = "white";
+        ctx.strokeText(item.text, canvas.width / 2, y);
+        ctx.fillText(item.text, canvas.width / 2, y);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function drawBurnOverlay() {
+      if (burnEffectTimer <= 0 || gameOver) return;
+
+      const pulse = (Math.sin(Date.now() / 120) + 1) / 2;
+      const alpha = 0.07 + pulse * 0.10;
+
+      ctx.fillStyle = "rgba(255, 0, 0, " + alpha + ")";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.textAlign = "center";
+      ctx.font = "22px Arial";
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "black";
+      ctx.fillStyle = "rgba(255, 210, 210, 0.95)";
+      ctx.strokeText("불뉴비 효과: " + Math.ceil(burnEffectTimer / 60) + "초", canvas.width / 2, 105);
+      ctx.fillText("불뉴비 효과: " + Math.ceil(burnEffectTimer / 60) + "초", canvas.width / 2, 105);
     }
 
     function drawHpBar() {
@@ -761,7 +1093,7 @@
       ctx.fillRect(barX, barY, barWidth, barHeight);
 
       ctx.fillStyle = "lime";
-      ctx.fillRect(barX, barY, barWidth * (hp / maxHp), barHeight);
+      ctx.fillRect(barX, barY, barWidth * Math.max(0, Math.min(1, hp / maxHp)), barHeight);
 
       ctx.strokeStyle = "white";
       ctx.lineWidth = 3;
@@ -824,6 +1156,7 @@
     }
 
     function startGame() {
+      resetGameplayValues();
       gameState = "play";
       canvas.style.cursor = "default";
       lastMoveTime = Date.now();
@@ -834,30 +1167,7 @@
     }
 
     function restartGame() {
-      hp = maxHp;
-      score = 0;
-      recentScore = 0;
-      scoreTimer = 0;
-
-      gameOver = false;
-      gameOverPhase = "none";
-      fadeAlpha = 0;
-      gameOverStartTime = 0;
-
-      obstacles = [];
-      spawnTimer = 0;
-
-      retryButtonAlpha = 0;
-      showRetryButton = false;
-      isHoverRetryButton = false;
-
-      player.x = 355;
-      player.y = 570;
-
-      moveDirection = "front";
-      currentPlayerImg = playerImages.front;
-      lastMoveTime = Date.now();
-
+      resetGameplayValues();
       canvas.style.cursor = "default";
 
       showMobileControls();
