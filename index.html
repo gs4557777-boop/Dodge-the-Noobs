@@ -172,6 +172,7 @@
 
     function pressLeft(e) {
       if (e) e.preventDefault();
+      unlockAudioByGesture();
       mobileLeft = true;
       leftBtn.classList.add("pressed");
     }
@@ -184,6 +185,7 @@
 
     function pressRight(e) {
       if (e) e.preventDefault();
+      unlockAudioByGesture();
       mobileRight = true;
       rightBtn.classList.add("pressed");
     }
@@ -223,17 +225,22 @@
     });
 
     let wantedAudio = null;
+    let audioPrepared = false;
 
-    function prepareAudio() {
+    function prepareAudioOnce() {
+      if (audioPrepared) return;
+      audioPrepared = true;
+
+      // preload="auto"만 믿고 감. 클릭할 때 load()를 다시 부르면 음악이 처음부터 다시 시작됨.
       try {
-        mainBgm.load();
-        playBgm.load();
+        mainBgm.preload = "auto";
+        playBgm.preload = "auto";
       } catch (err) {
-        // 로딩 준비 실패해도 게임은 계속 진행
+        // 오디오 준비 실패해도 게임은 계속 진행
       }
     }
 
-    prepareAudio();
+    prepareAudioOnce();
 
     function safeResetAudio(audio) {
       try {
@@ -244,45 +251,77 @@
     }
 
     function safePlay(audio) {
+      if (!audio) return;
       wantedAudio = audio;
 
-      const playPromise = audio.play();
+      try {
+        const playPromise = audio.play();
 
-      if (playPromise && typeof playPromise.catch === "function") {
-        playPromise.catch(function() {
-          // 모바일에서 첫 터치 직후 로딩이 늦으면 한 번 더 시도
-          setTimeout(function() {
-            if (wantedAudio !== audio) return;
-
-            const retryPromise = audio.play();
-
-            if (retryPromise && typeof retryPromise.catch === "function") {
-              retryPromise.catch(function() {
-                // 브라우저가 아직 막으면 조용히 무시. 다음 터치 때 다시 시도됨.
-              });
-            }
-          }, 160);
-        });
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch(function() {
+            // 모바일 브라우저가 막으면 다음 터치 때 다시 재생 시도됨
+          });
+        }
+      } catch (err) {
+        // 오디오 오류가 게임 루프를 죽이지 않게 막음
       }
     }
 
-    function playMainBgm() {
-      wantedAudio = mainBgm;
-      playBgm.pause();
-      safeResetAudio(playBgm);
+    function switchMusic(targetAudio, restart) {
+      if (!targetAudio) return;
+      prepareAudioOnce();
 
-      safeResetAudio(mainBgm);
-      safePlay(mainBgm);
+      const otherAudio = targetAudio === mainBgm ? playBgm : mainBgm;
+      wantedAudio = targetAudio;
+
+      try {
+        otherAudio.pause();
+      } catch (err) {
+        // 무시
+      }
+
+      if (restart) {
+        safeResetAudio(otherAudio);
+        safeResetAudio(targetAudio);
+      }
+
+      safePlay(targetAudio);
     }
 
-    function playPlayBgm() {
-      wantedAudio = playBgm;
-      mainBgm.pause();
-      safeResetAudio(mainBgm);
-
-      safeResetAudio(playBgm);
-      safePlay(playBgm);
+    function playMainBgm(restart) {
+      switchMusic(mainBgm, restart !== false);
     }
+
+    function playPlayBgm(restart) {
+      switchMusic(playBgm, restart !== false);
+    }
+
+    function unlockAudioByGesture() {
+      prepareAudioOnce();
+
+      if (gameState === "start") {
+        if (!wantedAudio) {
+          wantedAudio = mainBgm;
+        }
+        mainBgmStarted = true;
+        safePlay(wantedAudio);
+        return;
+      }
+
+      if (gameState === "play") {
+        if (!gameOver) {
+          wantedAudio = playBgm;
+        } else if (!wantedAudio) {
+          wantedAudio = mainBgm;
+        }
+
+        safePlay(wantedAudio);
+      }
+    }
+
+    // 첫 터치/클릭에서 오디오 잠금 해제만 함. currentTime은 건드리지 않아서 음악이 다시 시작하지 않음.
+    document.addEventListener("pointerdown", unlockAudioByGesture, { passive: true });
+    document.addEventListener("touchstart", unlockAudioByGesture, { passive: true });
 
     const startImg = new Image();
     startImg.src = "png/시작화면.png";
@@ -456,29 +495,33 @@
 
     let frameScale = 1;
     let lastFrameTime = 0;
+    let cachedMobileMode = false;
+
+    function updateDeviceMode() {
+      const width = window.innerWidth || document.documentElement.clientWidth || canvas.clientWidth || canvas.width;
+      const touchPoints = navigator.maxTouchPoints || navigator.msMaxTouchPoints || 0;
+      cachedMobileMode = width <= 768 || touchPoints > 0 || "ontouchstart" in window;
+    }
+
+    updateDeviceMode();
+    window.addEventListener("resize", updateDeviceMode);
+    window.addEventListener("orientationchange", updateDeviceMode);
 
     function isMobileMode() {
-      // 일부 모바일/인앱 브라우저에서 matchMedia가 폭탄 닿는 순간 에러를 내면 게임 루프가 멈출 수 있음
-      try {
-        if (window.matchMedia && window.matchMedia(MOBILE_MODE_QUERY).matches) {
-          return true;
-        }
-      } catch (err) {
-        // 아래 fallback으로 계속 진행
-      }
-
-      const width = window.innerWidth || document.documentElement.clientWidth || canvas.clientWidth || canvas.width;
-      const touchPoints = (navigator.maxTouchPoints || navigator.msMaxTouchPoints || 0);
-
-      return width <= 768 || touchPoints > 0 || "ontouchstart" in window;
+      return cachedMobileMode;
     }
 
     function getBombExplosionRadius() {
-      return isMobileMode() ? BOMB_EXPLOSION_RADIUS_MOBILE : BOMB_EXPLOSION_RADIUS_PC;
+      return cachedMobileMode ? BOMB_EXPLOSION_RADIUS_MOBILE : BOMB_EXPLOSION_RADIUS_PC;
+    }
+
+    function getBombVisualRadius(radius) {
+      // 실제 판정은 위 radius 그대로, 화면 이펙트만 너무 커서 렉 나는 걸 막음
+      return Math.min(radius, cachedMobileMode ? 420 : 680);
     }
 
     function getMaxObstacleLimit() {
-      return isMobileMode() ? MAX_OBSTACLES_MOBILE : MAX_OBSTACLES_PC;
+      return cachedMobileMode ? MAX_OBSTACLES_MOBILE : MAX_OBSTACLES_PC;
     }
 
     function trimObstacles() {
@@ -530,7 +573,7 @@
 
       if (!mainBgmStarted && gameState === "start") {
         mainBgmStarted = true;
-        safePlay(mainBgm);
+        playMainBgm(false);
       }
 
       if (gameState === "start" && showButton && (e.key === "Enter" || e.key === " ")) {
@@ -545,20 +588,6 @@
     document.addEventListener("keyup", function(e) {
       keys[e.key] = false;
     });
-
-    function handleFirstAudioGesture() {
-      prepareAudio();
-
-      if (!mainBgmStarted && gameState === "start") {
-        mainBgmStarted = true;
-        playMainBgm();
-      } else if (wantedAudio && wantedAudio.paused) {
-        safePlay(wantedAudio);
-      }
-    }
-
-    document.addEventListener("pointerdown", handleFirstAudioGesture, { passive: true });
-    document.addEventListener("touchstart", handleFirstAudioGesture, { passive: true });
 
     function gameLoop(timestamp) {
       try {
@@ -890,52 +919,43 @@
     }
 
     function triggerBomb() {
-      try {
-        const center = getRectCenter(player);
-        const radius = getBombExplosionRadius();
-        let removedCount = 0;
-        const keptObstacles = [];
+      const center = getRectCenter(player);
+      const radius = getBombExplosionRadius();
+      let removedCount = 0;
+      const keptObstacles = [];
 
-        // splice를 반복하면 모바일에서 순간 멈칫할 수 있어서 새 배열로 안전하게 재구성
-        for (const ob of obstacles) {
-          if (!ob) continue;
+      // 폭탄 처리 중 JS 오류가 나면 게임이 멈추니까, 숫자 이상한 오브젝트는 그냥 버림.
+      for (let i = 0; i < obstacles.length; i++) {
+        const ob = obstacles[i];
 
-          const canRemove = (ob.type === "normal" || ob.type === "fire") && isRectInCircle(ob, center.x, center.y, radius);
-
-          if (canRemove) {
-            removedCount++;
-          } else {
-            keptObstacles.push(ob);
-          }
+        if (!ob || !Number.isFinite(ob.x) || !Number.isFinite(ob.y) || !Number.isFinite(ob.width) || !Number.isFinite(ob.height)) {
+          continue;
         }
 
-        obstacles = keptObstacles;
-        trimObstacles();
-
-        explosionEffects.push({
-          x: center.x,
-          y: center.y,
-          radius: radius,
-          timer: 18,
-          maxTimer: 18
-        });
-
-        if (explosionEffects.length > 2) {
-          explosionEffects.shift();
+        if ((ob.type === "normal" || ob.type === "fire") && isRectInCircle(ob, center.x, center.y, radius)) {
+          removedCount++;
+          continue;
         }
 
-        if (removedCount > 0) {
-          addBonusText("폭탄 발동! 적 " + removedCount + "마리 제거");
-        } else {
-          addBonusText("폭탄 발동!");
-        }
-      } catch (err) {
-        console.error("폭탄 처리 오류:", err);
-        obstacles = obstacles.filter(function(ob) {
-          return ob && ob.type !== "bomb";
-        });
-        explosionEffects = [];
-        addBonusText("폭탄 오류 복구됨");
+        keptObstacles.push(ob);
+      }
+
+      obstacles = keptObstacles;
+      trimObstacles();
+
+      explosionEffects.length = 0;
+      explosionEffects.push({
+        x: center.x,
+        y: center.y,
+        radius: getBombVisualRadius(radius),
+        timer: 14,
+        maxTimer: 14
+      });
+
+      if (removedCount > 0) {
+        addBonusText("폭탄 발동! 적 " + removedCount + "마리 제거");
+      } else {
+        addBonusText("폭탄 발동!");
       }
     }
 
@@ -1231,13 +1251,13 @@
 
     function drawExplosionEffects() {
       for (const effect of explosionEffects) {
-        if (!effect || !Number.isFinite(effect.x) || !Number.isFinite(effect.y) || !Number.isFinite(effect.radius)) {
+        if (!effect || !Number.isFinite(effect.x) || !Number.isFinite(effect.y) || !Number.isFinite(effect.radius) || !Number.isFinite(effect.maxTimer)) {
           continue;
         }
 
         const progress = Math.max(0, Math.min(1, effect.timer / effect.maxTimer));
-        const radius = Math.min(effect.radius * (1 - progress * 0.25), 900);
-        const alpha = 0.25 * progress;
+        const radius = Math.max(1, Math.min(effect.radius * (1 - progress * 0.25), 700));
+        const alpha = Math.max(0, Math.min(0.22, 0.22 * progress));
 
         ctx.beginPath();
         ctx.arc(effect.x, effect.y, radius, 0, Math.PI * 2);
@@ -1442,7 +1462,7 @@
         e.preventDefault();
       }
 
-      handleFirstAudioGesture();
+      unlockAudioByGesture();
 
       const point = getCanvasPoint(e);
 
@@ -1463,10 +1483,6 @@
     canvas.addEventListener("pointermove", updateButtonHover);
 
     canvas.addEventListener("pointerdown", handleCanvasPress, {
-      passive: false
-    });
-
-    canvas.addEventListener("touchstart", handleCanvasPress, {
       passive: false
     });
 
