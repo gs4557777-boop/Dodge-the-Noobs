@@ -8,11 +8,13 @@
       margin: 0;
       background: #111;
       display: flex;
+      flex-direction: column;
       justify-content: center;
       align-items: center;
       height: 100vh;
       overflow: hidden;
       position: relative;
+      touch-action: none;
     }
 
     body::before {
@@ -42,10 +44,57 @@
       cursor: pointer;
       z-index: 1;
     }
+
+    #mobileControls {
+      display: none;
+      justify-content: center;
+      align-items: center;
+      gap: 35px;
+      margin-top: 10px;
+      z-index: 5;
+    }
+
+    #mobileControls.show {
+      display: flex;
+    }
+
+    #mobileControls button {
+      width: 90px;
+      height: 90px;
+      border: none;
+      background: transparent;
+      padding: 0;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #mobileControls img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      pointer-events: none;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    #mobileControls button.pressed img {
+      filter: brightness(55%);
+      transform: scale(0.95);
+    }
   </style>
 </head>
 <body>
   <canvas id="game" width="800" height="800"></canvas>
+
+  <div id="mobileControls">
+    <button id="leftBtn">
+      <img src="png/버튼/모바일 이동 버튼/왼쪽 버튼.png" alt="왼쪽">
+    </button>
+
+    <button id="rightBtn">
+      <img src="png/버튼/모바일 이동 버튼/오른쪽 버튼.png" alt="오른쪽">
+    </button>
+  </div>
 
   <audio id="mainBgm" src="sound/배경음악/메인화면.mp3" loop></audio>
   <audio id="playBgm" src="sound/배경음악/플레이 음악.mp3" loop></audio>
@@ -53,6 +102,13 @@
   <script>
     const canvas = document.getElementById("game");
     const ctx = canvas.getContext("2d");
+
+    const mobileControls = document.getElementById("mobileControls");
+    const leftBtn = document.getElementById("leftBtn");
+    const rightBtn = document.getElementById("rightBtn");
+
+    let mobileLeft = false;
+    let mobileRight = false;
 
     const mainBgm = document.getElementById("mainBgm");
     const playBgm = document.getElementById("playBgm");
@@ -63,6 +119,63 @@
     let gameState = "start";
     let keys = {};
     let mainBgmStarted = false;
+
+    function showMobileControls() {
+      mobileControls.classList.add("show");
+    }
+
+    function hideMobileControls() {
+      mobileControls.classList.remove("show");
+      mobileLeft = false;
+      mobileRight = false;
+      leftBtn.classList.remove("pressed");
+      rightBtn.classList.remove("pressed");
+    }
+
+    function pressLeft(e) {
+      e.preventDefault();
+      mobileLeft = true;
+      leftBtn.classList.add("pressed");
+    }
+
+    function releaseLeft(e) {
+      if (e) e.preventDefault();
+      mobileLeft = false;
+      leftBtn.classList.remove("pressed");
+    }
+
+    function pressRight(e) {
+      e.preventDefault();
+      mobileRight = true;
+      rightBtn.classList.add("pressed");
+    }
+
+    function releaseRight(e) {
+      if (e) e.preventDefault();
+      mobileRight = false;
+      rightBtn.classList.remove("pressed");
+    }
+
+    leftBtn.addEventListener("touchstart", pressLeft, { passive: false });
+    leftBtn.addEventListener("touchend", releaseLeft, { passive: false });
+    leftBtn.addEventListener("touchcancel", releaseLeft, { passive: false });
+
+    rightBtn.addEventListener("touchstart", pressRight, { passive: false });
+    rightBtn.addEventListener("touchend", releaseRight, { passive: false });
+    rightBtn.addEventListener("touchcancel", releaseRight, { passive: false });
+
+    leftBtn.addEventListener("mousedown", pressLeft);
+    leftBtn.addEventListener("mouseup", releaseLeft);
+    leftBtn.addEventListener("mouseleave", releaseLeft);
+
+    rightBtn.addEventListener("mousedown", pressRight);
+    rightBtn.addEventListener("mouseup", releaseRight);
+    rightBtn.addEventListener("mouseleave", releaseRight);
+
+    document.addEventListener("mouseup", function() {
+      releaseLeft();
+      releaseRight();
+    });
 
     function playMainBgm() {
       playBgm.pause();
@@ -266,14 +379,14 @@
 
       let moving = false;
 
-      if (keys["ArrowLeft"] || keys["a"] || keys["A"]) {
+      if (keys["ArrowLeft"] || keys["a"] || keys["A"] || mobileLeft) {
         player.x -= player.speed;
         moveDirection = "left";
         moving = true;
         lastMoveTime = Date.now();
       }
 
-      if (keys["ArrowRight"] || keys["d"] || keys["D"]) {
+      if (keys["ArrowRight"] || keys["d"] || keys["D"] || mobileRight) {
         player.x += player.speed;
         moveDirection = "right";
         moving = true;
@@ -296,7 +409,6 @@
         scoreTimer = 0;
       }
 
-      // 점수에 따라 난이도 증가
       const level = Math.floor(score / 500);
       const spawnDelay = Math.max(45 - level * 3, 20);
 
@@ -400,6 +512,8 @@
       gameOver = true;
       recentScore = score;
 
+      hideMobileControls();
+
       playMainBgm();
 
       if (score > bestScore) {
@@ -447,6 +561,8 @@
     }
 
     function drawStartScreen() {
+      hideMobileControls();
+
       ctx.globalAlpha = startAlpha;
       ctx.drawImage(startImg, 0, 0, canvas.width, canvas.height);
       ctx.globalAlpha = 1;
@@ -498,6 +614,8 @@
 
     function drawGameScreen() {
       if (gameOverPhase === "brighten" || gameOverPhase === "result") {
+        hideMobileControls();
+
         drawGameOverScreen();
 
         if (gameOverPhase === "brighten") {
@@ -506,6 +624,10 @@
         }
 
         return;
+      }
+
+      if (!gameOver) {
+        showMobileControls();
       }
 
       ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
@@ -630,6 +752,8 @@
 
       canvas.style.cursor = "default";
 
+      showMobileControls();
+
       playPlayBgm();
     }
 
@@ -671,6 +795,8 @@
           gameState = "play";
           canvas.style.cursor = "default";
           lastMoveTime = Date.now();
+
+          showMobileControls();
 
           playPlayBgm();
         }
