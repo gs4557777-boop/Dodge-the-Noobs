@@ -47,12 +47,38 @@
 <body>
   <canvas id="game" width="800" height="800"></canvas>
 
+  <audio id="mainBgm" src="sound/배경음악/메인화면.mp3" loop></audio>
+  <audio id="playBgm" src="sound/배경음악/플레이 음악.mp3" loop></audio>
+
   <script>
     const canvas = document.getElementById("game");
     const ctx = canvas.getContext("2d");
 
+    const mainBgm = document.getElementById("mainBgm");
+    const playBgm = document.getElementById("playBgm");
+
+    mainBgm.volume = 0.8;
+    playBgm.volume = 0.8;
+
     let gameState = "start";
     let keys = {};
+    let mainBgmStarted = false;
+
+    function playMainBgm() {
+      playBgm.pause();
+      playBgm.currentTime = 0;
+
+      mainBgm.currentTime = 0;
+      mainBgm.play();
+    }
+
+    function playPlayBgm() {
+      mainBgm.pause();
+      mainBgm.currentTime = 0;
+
+      playBgm.currentTime = 0;
+      playBgm.play();
+    }
 
     const startImg = new Image();
     startImg.src = "png/시작화면.png";
@@ -169,7 +195,7 @@
     let obstacles = [];
     let spawnTimer = 0;
 
-    let gameOverPhase = "none"; 
+    let gameOverPhase = "none";
     let fadeAlpha = 0;
     let gameOverStartTime = 0;
 
@@ -196,10 +222,22 @@
 
     document.addEventListener("keydown", function(e) {
       keys[e.key] = true;
+
+      if (!mainBgmStarted && gameState === "start") {
+        mainBgmStarted = true;
+        mainBgm.play();
+      }
     });
 
     document.addEventListener("keyup", function(e) {
       keys[e.key] = false;
+    });
+
+    document.addEventListener("click", function() {
+      if (!mainBgmStarted && gameState === "start") {
+        mainBgmStarted = true;
+        mainBgm.play();
+      }
     });
 
     function gameLoop() {
@@ -349,6 +387,8 @@
       gameOver = true;
       recentScore = score;
 
+      playMainBgm();
+
       if (score > bestScore) {
         bestScore = score;
         localStorage.setItem("bestScore", bestScore);
@@ -418,10 +458,32 @@
           startButton.height
         );
       }
+
+      drawMainCredits();
+    }
+
+    function drawMainCredits() {
+      ctx.font = "14px Arial";
+      ctx.textAlign = "left";
+
+      const line1 = "BGM: 베이컨 97 | TTS: Typecast 호빈";
+      const line2 = "If I Had a Chicken - Kevin MacLeod";
+
+      const x = 10;
+      const y1 = canvas.height - 32;
+      const y2 = canvas.height - 12;
+
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "black";
+      ctx.strokeText(line1, x, y1);
+      ctx.strokeText(line2, x, y2);
+
+      ctx.fillStyle = "rgba(190, 190, 190, 0.95)";
+      ctx.fillText(line1, x, y1);
+      ctx.fillText(line2, x, y2);
     }
 
     function drawGameScreen() {
-      // 밝아지는 순간부터는 이미 게임오버 화면으로 바뀐 상태
       if (gameOverPhase === "brighten" || gameOverPhase === "result") {
         drawGameOverScreen();
 
@@ -450,7 +512,6 @@
       drawHpBar();
       drawScoreText();
 
-      // 어두워지는 동안은 게임 화면 유지
       if (gameOverPhase === "darken") {
         ctx.fillStyle = "rgba(0, 0, 0, " + fadeAlpha + ")";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -555,6 +616,8 @@
       lastMoveTime = Date.now();
 
       canvas.style.cursor = "default";
+
+      playPlayBgm();
     }
 
     function isMouseOnButton(mouseX, mouseY, button) {
@@ -595,6 +658,8 @@
           gameState = "play";
           canvas.style.cursor = "default";
           lastMoveTime = Date.now();
+
+          playPlayBgm();
         }
       }
 
