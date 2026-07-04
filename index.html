@@ -394,6 +394,12 @@
 
     let explosionEffects = [];
 
+    // 폭탄 판정 강화
+    // BOMB_PICKUP_PADDING: 폭탄을 줍는 판정 여유
+    // BOMB_EXPLOSION_RADIUS: 폭탄이 주변 적을 제거하는 범위
+    const BOMB_PICKUP_PADDING = 35;
+    const BOMB_EXPLOSION_RADIUS = 285;
+
     let obstacles = [];
     let spawnTimer = 0;
 
@@ -530,7 +536,7 @@
         const ob = obstacles[i];
         ob.y += ob.speed;
 
-        if (isColliding(player, ob)) {
+        if (isCollidingWithObstacle(player, ob)) {
           obstacles.splice(i, 1);
 
           if (ob.type === "bomb") {
@@ -652,6 +658,23 @@
       );
     }
 
+    function getExpandedRect(rect, padding) {
+      return {
+        x: rect.x - padding,
+        y: rect.y - padding,
+        width: rect.width + padding * 2,
+        height: rect.height + padding * 2
+      };
+    }
+
+    function isCollidingWithObstacle(target, ob) {
+      if (ob.type === "bomb") {
+        return isColliding(target, getExpandedRect(ob, BOMB_PICKUP_PADDING));
+      }
+
+      return isColliding(target, ob);
+    }
+
     function getRectCenter(rect) {
       return {
         x: rect.x + rect.width / 2,
@@ -712,7 +735,7 @@
 
     function triggerBomb() {
       const center = getRectCenter(player);
-      const radius = 165;
+      const radius = BOMB_EXPLOSION_RADIUS;
       let removedCount = 0;
 
       for (let i = obstacles.length - 1; i >= 0; i--) {
@@ -733,7 +756,7 @@
       });
 
       if (removedCount > 0) {
-        addBonusText("폭탄! 주변 적 " + removedCount + "마리 제거");
+        addBonusText("폭탄 범위 확장! 적 " + removedCount + "마리 제거");
       } else {
         addBonusText("폭탄 발동!");
       }
