@@ -126,8 +126,8 @@
     </button>
   </div>
 
-  <audio id="mainBgm" src="sound/배경음악/메인화면.mp3" loop></audio>
-  <audio id="playBgm" src="sound/배경음악/플레이 음악.mp3" loop></audio>
+  <audio id="mainBgm" src="sound/배경음악/메인화면.mp3" loop preload="auto"></audio>
+  <audio id="playBgm" src="sound/배경음악/플레이 음악.mp3" loop preload="auto"></audio>
 
   <script>
     const canvas = document.getElementById("game");
@@ -151,15 +151,23 @@
     let mainBgmStarted = false;
 
     function showMobileControls() {
-      mobileControls.classList.add("show");
+      if (!mobileControls.classList.contains("show")) {
+        mobileControls.classList.add("show");
+      }
     }
 
-    function hideMobileControls() {
-      mobileControls.classList.remove("show");
+    function releaseMobileControls() {
       mobileLeft = false;
       mobileRight = false;
       leftBtn.classList.remove("pressed");
       rightBtn.classList.remove("pressed");
+    }
+
+    function hideMobileControls() {
+      if (mobileControls.classList.contains("show")) {
+        mobileControls.classList.remove("show");
+      }
+      releaseMobileControls();
     }
 
     function pressLeft(e) {
@@ -202,34 +210,77 @@
     rightBtn.addEventListener("mouseup", releaseRight);
     rightBtn.addEventListener("mouseleave", releaseRight);
 
-    document.addEventListener("mouseup", function() {
-      releaseLeft();
-      releaseRight();
+    document.addEventListener("mouseup", releaseMobileControls);
+    document.addEventListener("touchend", releaseMobileControls, { passive: false });
+    document.addEventListener("touchcancel", releaseMobileControls, { passive: false });
+
+    window.addEventListener("blur", releaseMobileControls);
+    document.addEventListener("visibilitychange", function() {
+      if (document.hidden) {
+        releaseMobileControls();
+        lastFrameTime = 0;
+      }
     });
 
+    let wantedAudio = null;
+
+    function prepareAudio() {
+      try {
+        mainBgm.load();
+        playBgm.load();
+      } catch (err) {
+        // 로딩 준비 실패해도 게임은 계속 진행
+      }
+    }
+
+    prepareAudio();
+
+    function safeResetAudio(audio) {
+      try {
+        audio.currentTime = 0;
+      } catch (err) {
+        // 아직 로딩 전이면 currentTime 변경이 막힐 수 있음
+      }
+    }
+
     function safePlay(audio) {
+      wantedAudio = audio;
+
       const playPromise = audio.play();
 
       if (playPromise && typeof playPromise.catch === "function") {
         playPromise.catch(function() {
-          // 모바일 브라우저가 자동재생을 막는 경우 콘솔 에러로 게임이 멈추지 않게 처리
+          // 모바일에서 첫 터치 직후 로딩이 늦으면 한 번 더 시도
+          setTimeout(function() {
+            if (wantedAudio !== audio) return;
+
+            const retryPromise = audio.play();
+
+            if (retryPromise && typeof retryPromise.catch === "function") {
+              retryPromise.catch(function() {
+                // 브라우저가 아직 막으면 조용히 무시. 다음 터치 때 다시 시도됨.
+              });
+            }
+          }, 160);
         });
       }
     }
 
     function playMainBgm() {
+      wantedAudio = mainBgm;
       playBgm.pause();
-      playBgm.currentTime = 0;
+      safeResetAudio(playBgm);
 
-      mainBgm.currentTime = 0;
+      safeResetAudio(mainBgm);
       safePlay(mainBgm);
     }
 
     function playPlayBgm() {
+      wantedAudio = playBgm;
       mainBgm.pause();
-      mainBgm.currentTime = 0;
+      safeResetAudio(mainBgm);
 
-      playBgm.currentTime = 0;
+      safeResetAudio(playBgm);
       safePlay(playBgm);
     }
 
@@ -395,10 +446,44 @@
     let explosionEffects = [];
 
     // 폭탄 판정 강화
-    // BOMB_PICKUP_PADDING: 폭탄을 줍는 판정 여유
-    // BOMB_EXPLOSION_RADIUS: 폭탄이 주변 적을 제거하는 범위
+    // 모바일/PC는 캔버스 표시 크기와 체감 범위가 달라서 따로 둠
+    const MOBILE_MODE_QUERY = "(max-width: 768px), (pointer: coarse)";
     const BOMB_PICKUP_PADDING = 35;
-    const BOMB_EXPLOSION_RADIUS = 485;
+    const BOMB_EXPLOSION_RADIUS_MOBILE = 385;
+    const BOMB_EXPLOSION_RADIUS_PC = 785;
+    const MAX_OBSTACLES_MOBILE = 55;
+    const MAX_OBSTACLES_PC = 90;
+
+    let frameScale = 1;
+    let lastFrameTime = 0;
+
+    function isMobileMode() {
+      return window.matchMedia(MOBILE_MODE_QUERY).matches;
+    }
+
+    function getBombExplosionRadius() {
+      return isMobileMode() ? BOMB_EXPLOSION_RADIUS_MOBILE : BOMB_EXPLOSION_RADIUS_PC;
+    }
+
+    function getMaxObstacleLimit() {
+      return isMobileMode() ? MAX_OBSTACLES_MOBILE : MAX_OBSTACLES_PC;
+    }
+
+    function trimObstacles() {
+      const limit = getMaxObstacleLimit();
+
+      while (obstacles.length > limit) {
+        let removeIndex = obstacles.findIndex(function(ob) {
+          return ob.type !== "bomb";
+        });
+
+        if (removeIndex === -1) {
+          removeIndex = 0;
+        }
+
+        obstacles.splice(removeIndex, 1);
+      }
+    }
 
     let obstacles = [];
     let spawnTimer = 0;
@@ -449,14 +534,31 @@
       keys[e.key] = false;
     });
 
-    document.addEventListener("pointerdown", function() {
+    function handleFirstAudioGesture() {
+      prepareAudio();
+
       if (!mainBgmStarted && gameState === "start") {
         mainBgmStarted = true;
-        safePlay(mainBgm);
+        playMainBgm();
+      } else if (wantedAudio && wantedAudio.paused) {
+        safePlay(wantedAudio);
       }
-    });
+    }
 
-    function gameLoop() {
+    document.addEventListener("pointerdown", handleFirstAudioGesture, { passive: true });
+    document.addEventListener("touchstart", handleFirstAudioGesture, { passive: true });
+
+    function gameLoop(timestamp) {
+      if (!lastFrameTime) {
+        lastFrameTime = timestamp;
+      }
+
+      const delta = timestamp - lastFrameTime;
+      lastFrameTime = timestamp;
+
+      // 모바일에서 순간 렉이 와도 다음 프레임에 계산이 폭주하지 않게 제한
+      frameScale = Math.min(Math.max(delta / 16.6667, 0.5), 2.5);
+
       update();
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -488,14 +590,14 @@
       let moving = false;
 
       if (keys["ArrowLeft"] || keys["a"] || keys["A"] || mobileLeft) {
-        player.x -= player.speed;
+        player.x -= player.speed * frameScale;
         moveDirection = "left";
         moving = true;
         lastMoveTime = Date.now();
       }
 
       if (keys["ArrowRight"] || keys["d"] || keys["D"] || mobileRight) {
-        player.x += player.speed;
+        player.x += player.speed * frameScale;
         moveDirection = "right";
         moving = true;
         lastMoveTime = Date.now();
@@ -511,7 +613,7 @@
 
       updatePlayerAnimation(moving);
 
-      scoreTimer++;
+      scoreTimer += frameScale;
       if (scoreTimer >= 60) {
         score += 50;
         scoreTimer = 0;
@@ -520,7 +622,7 @@
       const level = Math.floor(score / 500);
       const spawnDelay = Math.max(45 - level * 3, 20);
 
-      spawnTimer++;
+      spawnTimer += frameScale;
 
       if (spawnTimer > spawnDelay) {
         const enemyCount = Math.min(1 + Math.floor(level / 2), 4);
@@ -534,7 +636,7 @@
 
       for (let i = obstacles.length - 1; i >= 0; i--) {
         const ob = obstacles[i];
-        ob.y += ob.speed;
+        ob.y += ob.speed * frameScale;
 
         if (isCollidingWithObstacle(player, ob)) {
           obstacles.splice(i, 1);
@@ -564,7 +666,7 @@
 
     function updatePlayerAnimation(moving) {
       if (moving) {
-        animTimer++;
+        animTimer += frameScale;
 
         if (animTimer > 8) {
           animIndex++;
@@ -632,6 +734,8 @@
       if (Math.random() < 0.035) {
         spawnBomb();
       }
+
+      trimObstacles();
     }
 
     function spawnBomb() {
@@ -719,8 +823,8 @@
     function updateBurnEffect() {
       if (burnEffectTimer <= 0) return;
 
-      burnEffectTimer--;
-      burnDamageTimer++;
+      burnEffectTimer -= frameScale;
+      burnDamageTimer += frameScale;
 
       if (burnDamageTimer >= 60) {
         burnDamageTimer = 0;
@@ -735,7 +839,7 @@
 
     function triggerBomb() {
       const center = getRectCenter(player);
-      const radius = BOMB_EXPLOSION_RADIUS;
+      const radius = getBombExplosionRadius();
       let removedCount = 0;
 
       for (let i = obstacles.length - 1; i >= 0; i--) {
@@ -763,7 +867,7 @@
     }
 
     function updateDamageFreeReward() {
-      damageFreeTimer++;
+      damageFreeTimer += frameScale;
 
       if (damageFreeTimer < damageFreeRequirement) return;
 
@@ -794,7 +898,7 @@
 
     function updateBonusTexts() {
       for (let i = bonusTexts.length - 1; i >= 0; i--) {
-        bonusTexts[i].timer--;
+        bonusTexts[i].timer -= frameScale;
 
         if (bonusTexts[i].timer <= 0) {
           bonusTexts.splice(i, 1);
@@ -804,7 +908,7 @@
 
     function updateExplosionEffects() {
       for (let i = explosionEffects.length - 1; i >= 0; i--) {
-        explosionEffects[i].timer--;
+        explosionEffects[i].timer -= frameScale;
 
         if (explosionEffects[i].timer <= 0) {
           explosionEffects.splice(i, 1);
@@ -876,14 +980,14 @@
 
     function updateGameOverEffect() {
       if (gameOverPhase === "darken") {
-        fadeAlpha += 0.025;
+        fadeAlpha += 0.025 * frameScale;
 
         if (fadeAlpha >= 1) {
           fadeAlpha = 1;
           gameOverPhase = "brighten";
         }
       } else if (gameOverPhase === "brighten") {
-        fadeAlpha -= 0.025;
+        fadeAlpha -= 0.025 * frameScale;
 
         if (fadeAlpha <= 0) {
           fadeAlpha = 0;
@@ -896,7 +1000,7 @@
         }
 
         if (showRetryButton && retryButtonAlpha < 1) {
-          retryButtonAlpha += 0.02;
+          retryButtonAlpha += 0.02 * frameScale;
 
           if (retryButtonAlpha > 1) {
             retryButtonAlpha = 1;
@@ -1179,6 +1283,7 @@
     }
 
     function startGame() {
+      mainBgmStarted = true;
       resetGameplayValues();
       gameState = "play";
       canvas.style.cursor = "default";
@@ -1243,10 +1348,24 @@
       }
     }
 
+    let lastCanvasPressTime = 0;
+
     function handleCanvasPress(e) {
+      const now = Date.now();
+
+      if (e && e.type === "click" && now - lastCanvasPressTime < 450) {
+        return;
+      }
+
+      if (e && e.type !== "click") {
+        lastCanvasPressTime = now;
+      }
+
       if (e) {
         e.preventDefault();
       }
+
+      handleFirstAudioGesture();
 
       const point = getCanvasPoint(e);
 
@@ -1267,6 +1386,10 @@
     canvas.addEventListener("pointermove", updateButtonHover);
 
     canvas.addEventListener("pointerdown", handleCanvasPress, {
+      passive: false
+    });
+
+    canvas.addEventListener("touchstart", handleCanvasPress, {
       passive: false
     });
 
