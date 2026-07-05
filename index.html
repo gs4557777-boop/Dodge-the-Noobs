@@ -350,6 +350,12 @@
     const fireEnemyImg = new Image();
     fireEnemyImg.src = "png/적/불뉴비.png";
 
+    const rapidEnemyImg = new Image();
+    rapidEnemyImg.src = "png/적/급격히떨어지는뉴비.png";
+
+    const angelEnemyImg = new Image();
+    angelEnemyImg.src = "png/적/천사 뉴비.png";
+
     const bombImg = new Image();
     bombImg.src = "png/아이템/폭탄.png";
 
@@ -358,6 +364,9 @@
 
     const invincibleEffectImg = new Image();
     invincibleEffectImg.src = "png/효과/무적상태표시.png";
+
+    const stunnedPlayerImg = new Image();
+    stunnedPlayerImg.src = "png/주인공/주인공_기절.png";
 
     const gameOverImg = new Image();
     gameOverImg.src = "png/게임 오버.png";
@@ -389,7 +398,7 @@
     playerImages.left2.src = "png/주인공/주인공_왼쪽 이동 2.png";
 
     let loadedCount = 0;
-    const totalImages = 19;
+    const totalImages = 22;
     let loopStarted = false;
 
     function imageLoaded() {
@@ -429,9 +438,12 @@
       [startButtonHoverImg, "시작 버튼 선택됨"],
       [enemyImg, "뉴비"],
       [fireEnemyImg, "불뉴비"],
+      [rapidEnemyImg, "급격히떨어지는뉴비"],
+      [angelEnemyImg, "천사 뉴비"],
       [bombImg, "폭탄"],
       [healthPotionImg, "체력음료"],
       [invincibleEffectImg, "무적상태표시"],
+      [stunnedPlayerImg, "주인공 기절"],
       [gameOverImg, "게임 오버"],
       [retryButtonImg, "다시 버튼"],
       [retryButtonHoverImg, "다시 버튼 선택됨"],
@@ -496,11 +508,17 @@
     let bonusTexts = [];
 
     let burnEffectTimer = 0;
-    const burnEffectDuration = 60 * 8;
+    const burnEffectDuration = 60 * 4;
     let burnDamageTimer = 0;
 
     let invincibleTimer = 0;
     const invincibleDuration = 60 * 1.5;
+
+    let stunTimer = 0;
+    const stunDuration = 60 * 1;
+
+    let slowTimer = 0;
+    const slowDuration = 60 * 5;
 
     let explosionEffects = [];
 
@@ -510,11 +528,16 @@
     const BOMB_PICKUP_PADDING = 35;
     const BOMB_EXPLOSION_RADIUS_MOBILE = 385;
     const BOMB_EXPLOSION_RADIUS_PC = 785;
-    const MAX_OBSTACLES_MOBILE = 48;
-    const MAX_OBSTACLES_PC = 76;
+    const MAX_OBSTACLES_MOBILE = 42;
+    const MAX_OBSTACLES_PC = 66;
     const POTION_PICKUP_PADDING = 25;
     const POTION_START_SCORE = 1500;
+    const RAPID_START_SCORE = 1800;
+    const ANGEL_START_SCORE = 2500;
     const GROUND_REMOVE_OFFSET = 14;
+    const ENEMY_HITBOX_SHRINK = 8;
+    const RAPID_WARNING_TIME = 60 * 1.15;
+    const ANGEL_WAIT_TIME = 60 * 1;
 
     let frameScale = 1;
     let lastFrameTime = 0;
@@ -688,21 +711,32 @@
 
       updateBurnEffect();
       updateInvincibleEffect();
+      updateStunEffect();
+      updateSlowEffect();
       if (gameOver) return;
 
       let moving = false;
+      const isStunned = stunTimer > 0;
+      const moveSpeed = getPlayerMoveSpeed();
 
-      if (keys["ArrowLeft"] || keys["a"] || keys["A"] || mobileLeft) {
-        player.x -= player.speed * frameScale;
-        moveDirection = "left";
-        moving = true;
-        lastMoveTime = Date.now();
-      }
+      if (!isStunned) {
+        if (keys["ArrowLeft"] || keys["a"] || keys["A"] || mobileLeft) {
+          player.x -= moveSpeed * frameScale;
+          moveDirection = "left";
+          moving = true;
+          lastMoveTime = Date.now();
+        }
 
-      if (keys["ArrowRight"] || keys["d"] || keys["D"] || mobileRight) {
-        player.x += player.speed * frameScale;
-        moveDirection = "right";
-        moving = true;
+        if (keys["ArrowRight"] || keys["d"] || keys["D"] || mobileRight) {
+          player.x += moveSpeed * frameScale;
+          moveDirection = "right";
+          moving = true;
+          lastMoveTime = Date.now();
+        }
+      } else {
+        releaseMobileControls();
+        currentPlayerImg = stunnedPlayerImg;
+        moving = false;
         lastMoveTime = Date.now();
       }
 
@@ -714,7 +748,9 @@
         player.x = canvas.width - player.width;
       }
 
-      updatePlayerAnimation(moving);
+      if (!isStunned) {
+        updatePlayerAnimation(moving);
+      }
 
       scoreTimer += frameScale;
       if (scoreTimer >= 60) {
@@ -723,14 +759,14 @@
       }
 
       const level = Math.floor(score / 500);
-      // 난이도 살짝 너프: 초반/중반 적 생성 간격을 조금 넓힘
-      const spawnDelay = Math.max(55 - level * 2.5, 26);
+      // 난이도 추가 너프: 초보자도 버틸 수 있게 초반/중반 생성 간격을 더 넓힘
+      const spawnDelay = Math.max(68 - level * 1.8, 32);
 
       spawnTimer += frameScale;
 
       if (spawnTimer > spawnDelay) {
-        // 난이도 살짝 너프: 한 번에 떨어지는 적 수 증가 속도 완화
-        const enemyCount = Math.min(1 + Math.floor(level / 3), 3);
+        // 난이도 추가 너프: 한 번에 떨어지는 적 수를 더 천천히 증가
+        const enemyCount = Math.min(1 + Math.floor(level / 5), 3);
 
         for (let i = 0; i < enemyCount; i++) {
           spawnObstacle();
@@ -747,11 +783,23 @@
           continue;
         }
 
-        ob.y += ob.speed * frameScale;
+        const motionResult = updateObstacleMotion(ob, i);
+        if (motionResult === "removed" || motionResult === "replaced") {
+          continue;
+        }
+
+        if (motionResult === "skipCollision") {
+          continue;
+        }
 
         if (isCollidingWithObstacle(player, ob)) {
-          if ((ob.type === "normal" || ob.type === "fire") && isEnemyTooLowToDamage(ob)) {
+          if (isDamagingEnemyType(ob.type) && isEnemyTooLowToDamage(ob)) {
             // 주인공보다 더 낮게 지나간 적은 맞은 판정으로 안 봄
+            continue;
+          }
+
+          if (stunTimer > 0 && isItemType(ob.type)) {
+            // 기절 중에는 아이템을 먹지 못함
             continue;
           }
 
@@ -764,6 +812,10 @@
             break;
           } else if (ob.type === "potion") {
             useHealthPotion();
+          } else if (ob.type === "rapid") {
+            hitByRapidEnemy();
+          } else if (ob.type === "angel") {
+            hitByAngelEnemy();
           } else if (ob.type === "fire") {
             hitByFireEnemy();
           } else {
@@ -828,15 +880,15 @@
     function spawnObstacle() {
       const level = Math.floor(score / 500);
 
-      // 난이도 살짝 너프: 크기/속도 상승폭 완화
-      const size = Math.min(58 + level * 2, 78);
-      const speed = Math.min(Math.random() * 2.4 + 2.6 + level * 0.25, 8);
+      // 난이도 추가 너프: 크기/속도 상승폭 완화
+      const size = Math.min(56 + level * 1.5, 74);
+      const speed = Math.min(Math.random() * 2.0 + 2.3 + level * 0.18, 7.2);
 
       let type = "normal";
 
       // 난이도 올라가면 가끔 불뉴비 등장
       if (level >= 2) {
-        const fireChance = Math.min(0.04 + (level - 2) * 0.012, 0.14);
+        const fireChance = Math.min(0.025 + (level - 2) * 0.008, 0.10);
 
         if (Math.random() < fireChance) {
           type = "fire";
@@ -853,7 +905,7 @@
       });
 
       // 적이 떨어질 때마다 아주 가끔 폭탄도 같이 떨어짐
-      if (Math.random() < 0.032) {
+      if (Math.random() < 0.028) {
         spawnBomb();
       }
 
@@ -863,6 +915,24 @@
 
         if (Math.random() < potionChance) {
           spawnHealthPotion();
+        }
+      }
+
+      // 1800점부터 가끔 급강하 뉴비 예고선 등장
+      if (score >= RAPID_START_SCORE && !hasObstacleType("rapidWarning") && !hasObstacleType("rapid")) {
+        const rapidChance = Math.min(0.014 + Math.floor((score - RAPID_START_SCORE) / 1200) * 0.004, 0.035);
+
+        if (Math.random() < rapidChance) {
+          spawnRapidWarning();
+        }
+      }
+
+      // 2500점부터 아주 가끔 천사 뉴비 등장
+      if (score >= ANGEL_START_SCORE && !hasObstacleType("angel")) {
+        const angelChance = Math.min(0.006 + Math.floor((score - ANGEL_START_SCORE) / 1500) * 0.003, 0.018);
+
+        if (Math.random() < angelChance) {
+          spawnAngelEnemy();
         }
       }
 
@@ -899,6 +969,56 @@
       });
     }
 
+    function spawnRapidWarning() {
+      const size = 72;
+      const x = Math.random() * (canvas.width - size);
+
+      obstacles.push({
+        type: "rapidWarning",
+        x: x,
+        y: 0,
+        width: size,
+        height: canvas.height,
+        speed: 0,
+        timer: RAPID_WARNING_TIME,
+        maxTimer: RAPID_WARNING_TIME,
+        enemySize: size
+      });
+    }
+
+    function createRapidEnemyFromWarning(warning) {
+      const level = Math.floor(score / 500);
+      const size = warning.enemySize || 72;
+
+      return {
+        type: "rapid",
+        x: Math.max(0, Math.min(canvas.width - size, warning.x)),
+        y: -size,
+        width: size,
+        height: size,
+        speed: Math.min(14.5 + level * 0.35, 20)
+      };
+    }
+
+    function spawnAngelEnemy() {
+      const size = 74;
+      const x = Math.random() * (canvas.width - size);
+
+      obstacles.push({
+        type: "angel",
+        phase: "wait",
+        x: x,
+        y: 65,
+        width: size,
+        height: size,
+        speed: 0,
+        timer: ANGEL_WAIT_TIME,
+        maxTimer: ANGEL_WAIT_TIME,
+        vx: 0,
+        vy: 0
+      });
+    }
+
     function isColliding(a, b) {
       return (
         a.x < b.x + b.width &&
@@ -917,8 +1037,35 @@
       };
     }
 
+    function getShrunkRect(rect, shrink) {
+      const safeShrink = Math.min(shrink, rect.width / 2 - 1, rect.height / 2 - 1);
+
+      if (safeShrink <= 0) {
+        return rect;
+      }
+
+      return {
+        x: rect.x + safeShrink,
+        y: rect.y + safeShrink,
+        width: rect.width - safeShrink * 2,
+        height: rect.height - safeShrink * 2
+      };
+    }
+
+    function isItemType(type) {
+      return type === "bomb" || type === "potion";
+    }
+
+    function isDamagingEnemyType(type) {
+      return type === "normal" || type === "fire" || type === "rapid" || type === "angel";
+    }
+
     function isCollidingWithObstacle(target, ob) {
-      if (!ob) return false;
+      if (!ob || ob.type === "rapidWarning") return false;
+
+      if (ob.type === "angel" && ob.phase === "wait") {
+        return false;
+      }
 
       if (ob.type === "bomb") {
         return isColliding(target, getExpandedRect(ob, BOMB_PICKUP_PADDING));
@@ -928,7 +1075,72 @@
         return isColliding(target, getExpandedRect(ob, POTION_PICKUP_PADDING));
       }
 
+      if (isDamagingEnemyType(ob.type)) {
+        return isColliding(target, getShrunkRect(ob, ENEMY_HITBOX_SHRINK));
+      }
+
       return isColliding(target, ob);
+    }
+
+    function updateObstacleMotion(ob, index) {
+      if (!ob) {
+        obstacles.splice(index, 1);
+        return "removed";
+      }
+
+      if (ob.type === "rapidWarning") {
+        ob.timer -= frameScale;
+
+        if (ob.timer <= 0) {
+          obstacles[index] = createRapidEnemyFromWarning(ob);
+          return "replaced";
+        }
+
+        return "skipCollision";
+      }
+
+      if (ob.type === "angel") {
+        if (ob.phase === "wait") {
+          ob.timer -= frameScale;
+          ob.y += Math.sin(Date.now() / 140) * 0.08 * frameScale;
+
+          if (ob.timer <= 0) {
+            startAngelDash(ob);
+          }
+
+          return "skipCollision";
+        }
+
+        ob.x += ob.vx * frameScale;
+        ob.y += ob.vy * frameScale;
+
+        if (ob.y + ob.height >= getGroundRemoveY() || ob.x + ob.width < -80 || ob.x > canvas.width + 80) {
+          obstacles.splice(index, 1);
+          return "removed";
+        }
+
+        return "moved";
+      }
+
+      ob.y += ob.speed * frameScale;
+      return "moved";
+    }
+
+    function startAngelDash(ob) {
+      const level = Math.floor(score / 500);
+      const obCenter = getRectCenter(ob);
+      const playerCenter = getRectCenter(player);
+      const targetX = playerCenter.x;
+      const targetY = canvas.height + 80;
+      const dx = targetX - obCenter.x;
+      const dy = targetY - obCenter.y;
+      const length = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
+      const dashSpeed = Math.min(7.2 + level * 0.15, 10.5);
+
+      ob.phase = "dash";
+      ob.vx = (dx / length) * dashSpeed;
+      ob.vy = (dy / length) * dashSpeed;
+      ob.speed = dashSpeed;
     }
 
     function getRectCenter(rect) {
@@ -977,7 +1189,38 @@
       if (!wasBurning) {
         burnEffectTimer = burnEffectDuration;
         burnDamageTimer = 0;
-        addBonusText("불뉴비 효과! 8초 지속 피해");
+        addBonusText("불뉴비 효과! 4초 지속 피해");
+      }
+    }
+
+    function hitByRapidEnemy() {
+      if (invincibleTimer > 0) {
+        addBonusText("무적 상태! 급강하 피해 무효");
+        return;
+      }
+
+      takeDamage(12);
+      if (gameOver) return;
+
+      stunTimer = Math.max(stunTimer, stunDuration);
+      releaseMobileControls();
+      addBonusText("급강하 충돌! 1초 기절");
+    }
+
+    function hitByAngelEnemy() {
+      if (invincibleTimer > 0) {
+        addBonusText("무적 상태! 천사 피해 무효");
+        return;
+      }
+
+      takeDamage(9);
+      if (gameOver) return;
+
+      if (slowTimer <= 0) {
+        slowTimer = slowDuration;
+        addBonusText("천사 뉴비 효과! 5초 감속");
+      } else {
+        addBonusText("이미 감속 중!");
       }
     }
 
@@ -991,6 +1234,34 @@
       }
     }
 
+    function updateStunEffect() {
+      if (stunTimer <= 0) return;
+
+      stunTimer -= frameScale;
+
+      if (stunTimer <= 0) {
+        stunTimer = 0;
+      }
+    }
+
+    function updateSlowEffect() {
+      if (slowTimer <= 0) return;
+
+      slowTimer -= frameScale;
+
+      if (slowTimer <= 0) {
+        slowTimer = 0;
+      }
+    }
+
+    function getPlayerMoveSpeed() {
+      if (slowTimer > 0) {
+        return player.speed * 0.55;
+      }
+
+      return player.speed;
+    }
+
     function useHealthPotion() {
       const healAmount = Math.floor(Math.random() * 11) + 5;
       hp = Math.min(maxHp, hp + healAmount);
@@ -999,7 +1270,7 @@
     }
 
     function isEnemyTooLowToDamage(ob) {
-      if (!ob || ob.type === "bomb" || ob.type === "potion") return false;
+      if (!ob || !isDamagingEnemyType(ob.type)) return false;
 
       return ob.y > player.y + player.height * 0.62;
     }
@@ -1045,7 +1316,7 @@
           continue;
         }
 
-        if ((ob.type === "normal" || ob.type === "fire") && isRectInCircle(ob, center.x, center.y, radius)) {
+        if (isDamagingEnemyType(ob.type) && isRectInCircle(ob, center.x, center.y, radius)) {
           removedCount++;
           continue;
         }
@@ -1140,6 +1411,8 @@
       burnEffectTimer = 0;
       burnDamageTimer = 0;
       invincibleTimer = 0;
+      stunTimer = 0;
+      slowTimer = 0;
       explosionEffects = [];
 
       obstacles = [];
@@ -1166,6 +1439,8 @@
       burnEffectTimer = 0;
       burnDamageTimer = 0;
       invincibleTimer = 0;
+      stunTimer = 0;
+      slowTimer = 0;
       damageFreeTimer = 0;
       explosionEffects = [];
       bonusTexts = [];
@@ -1325,6 +1600,8 @@
       drawInvincibleEffect();
       drawExplosionEffects();
       drawBurnOverlay();
+      drawSlowOverlay();
+      drawStunText();
 
       drawHpBar();
       drawScoreText();
@@ -1337,10 +1614,25 @@
     }
 
     function drawObstacle(ob) {
+      if (!ob) return;
+
+      if (ob.type === "rapidWarning") {
+        drawRapidWarning(ob);
+        return;
+      }
+
       let img = enemyImg;
 
       if (ob.type === "fire") {
         img = fireEnemyImg;
+      }
+
+      if (ob.type === "rapid") {
+        img = rapidEnemyImg;
+      }
+
+      if (ob.type === "angel") {
+        img = angelEnemyImg;
       }
 
       if (ob.type === "bomb") {
@@ -1361,6 +1653,10 @@
         ctx.fillStyle = "yellow";
       } else if (ob.type === "potion") {
         ctx.fillStyle = "lime";
+      } else if (ob.type === "rapid") {
+        ctx.fillStyle = "crimson";
+      } else if (ob.type === "angel") {
+        ctx.fillStyle = "gold";
       } else if (ob.type === "fire") {
         ctx.fillStyle = "red";
       } else {
@@ -1368,6 +1664,33 @@
       }
 
       ctx.fillRect(ob.x, ob.y, ob.width, ob.height);
+    }
+
+    function drawRapidWarning(ob) {
+      const progress = 1 - Math.max(0, Math.min(1, ob.timer / ob.maxTimer));
+      const alpha = 0.18 + progress * 0.46;
+      const lineX = ob.x + ob.width / 2;
+      const lineWidth = ob.width * (0.72 + progress * 0.28);
+
+      ctx.save();
+      ctx.fillStyle = "rgba(255, 0, 0, " + alpha + ")";
+      ctx.fillRect(lineX - lineWidth / 2, 0, lineWidth, canvas.height);
+
+      ctx.strokeStyle = "rgba(255, 220, 220, " + Math.min(0.8, alpha + 0.15) + ")";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(lineX, 0);
+      ctx.lineTo(lineX, canvas.height);
+      ctx.stroke();
+
+      ctx.textAlign = "center";
+      ctx.font = "22px Arial";
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "black";
+      ctx.fillStyle = "rgba(255, 230, 230, 0.95)";
+      ctx.strokeText("급강하 주의!", lineX, 70);
+      ctx.fillText("급강하 주의!", lineX, 70);
+      ctx.restore();
     }
 
     function drawInvincibleEffect() {
@@ -1453,6 +1776,36 @@
       ctx.fillStyle = "rgba(255, 210, 210, 0.95)";
       ctx.strokeText("불뉴비 효과: " + Math.ceil(burnEffectTimer / 60) + "초", canvas.width / 2, 105);
       ctx.fillText("불뉴비 효과: " + Math.ceil(burnEffectTimer / 60) + "초", canvas.width / 2, 105);
+    }
+
+    function drawSlowOverlay() {
+      if (slowTimer <= 0 || gameOver) return;
+
+      const pulse = (Math.sin(Date.now() / 110) + 1) / 2;
+      const alpha = 0.045 + pulse * 0.09;
+
+      ctx.fillStyle = "rgba(255, 225, 0, " + alpha + ")";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.textAlign = "center";
+      ctx.font = "22px Arial";
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "black";
+      ctx.fillStyle = "rgba(255, 245, 170, 0.95)";
+      ctx.strokeText("감속 효과: " + Math.ceil(slowTimer / 60) + "초", canvas.width / 2, 135);
+      ctx.fillText("감속 효과: " + Math.ceil(slowTimer / 60) + "초", canvas.width / 2, 135);
+    }
+
+    function drawStunText() {
+      if (stunTimer <= 0 || gameOver) return;
+
+      ctx.textAlign = "center";
+      ctx.font = "26px Arial";
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = "black";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+      ctx.strokeText("기절!", canvas.width / 2, 170);
+      ctx.fillText("기절!", canvas.width / 2, 170);
     }
 
     function drawHpBar() {
